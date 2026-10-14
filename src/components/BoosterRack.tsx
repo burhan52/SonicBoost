@@ -6,6 +6,7 @@ import {
   Flame,
   Radio,
   SlidersHorizontal,
+  Split,
 } from 'lucide-react';
 import { BoosterSettings } from '../types/audio';
 
@@ -157,7 +158,7 @@ export const BoosterRack: React.FC<BoosterRackProps> = ({
         </div>
       </div>
 
-      {/* Secondary Controls: Preamp Trim, Analog Warmth, Stereo Widener */}
+      {/* Secondary Controls: Preamp Trim, Analog Warmth, Stereo Balance */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-zinc-800/70">
         {/* Preamp Trim */}
         <div className="bg-zinc-950/40 border border-zinc-800/80 rounded-lg p-2.5 flex flex-col justify-between">
@@ -203,15 +204,34 @@ export const BoosterRack: React.FC<BoosterRackProps> = ({
           </label>
         </div>
 
-        {/* Protection Status Note */}
-        <div className="bg-zinc-950/40 border border-zinc-800/80 rounded-lg p-2.5 flex items-center gap-2">
-          <div className="p-1 rounded bg-zinc-900 border border-zinc-800 text-zinc-400">
-            <Radio className="w-3.5 h-3.5 text-cyan-400" />
+        {/* Stereo L/R Balance */}
+        <div
+          className="bg-zinc-950/40 border border-zinc-800/80 rounded-lg p-2.5 flex flex-col justify-between"
+          onDoubleClick={() => onChange({ stereoBalance: 0 })}
+          title="Double-click to reset balance to Center"
+        >
+          <div className="flex items-center justify-between text-xs font-mono text-zinc-300 mb-1.5">
+            <span className="flex items-center gap-1">
+              <Split className="w-3 h-3 text-cyan-400" />
+              L/R Balance
+            </span>
+            <span className="text-zinc-400">
+              {settings.stereoBalance === 0
+                ? 'Center'
+                : settings.stereoBalance < 0
+                ? `${Math.abs(settings.stereoBalance)}% L`
+                : `${settings.stereoBalance}% R`}
+            </span>
           </div>
-          <div>
-            <div className="text-xs font-mono text-zinc-300">Intelligent Gain AGC</div>
-            <p className="text-[10px] text-zinc-400">Dynamic crest factor balance</p>
-          </div>
+          <input
+            type="range"
+            min="-100"
+            max="100"
+            step="5"
+            value={settings.stereoBalance}
+            onChange={(e) => onChange({ stereoBalance: parseInt(e.target.value) })}
+            className="w-full h-1.5 bg-zinc-800 rounded-lg accent-cyan-400 cursor-pointer"
+          />
         </div>
       </div>
     </div>

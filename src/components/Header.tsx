@@ -8,6 +8,7 @@ import {
   Sliders,
   ShieldCheck,
   Disc,
+  Keyboard,
 } from 'lucide-react';
 import { BoosterSettings } from '../types/audio';
 
@@ -33,7 +34,7 @@ export const Header: React.FC<HeaderProps> = ({
   onDownloadRecording,
 }) => {
   return (
-    <header className="border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-md sticky top-0 z-40 px-4 lg:px-8 py-3.5">
+    <header className="border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-md sticky top-0 z-40 px-4 lg:px-8 py-3">
       <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
         {/* Brand & Identity */}
         <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-start">
@@ -47,7 +48,7 @@ export const Header: React.FC<HeaderProps> = ({
                   AURABOOST
                 </span>
                 <span className="text-[10px] uppercase font-mono tracking-widest text-amber-400/90 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
-                  DSP ENGINE
+                  DSP RACK
                 </span>
               </div>
               <p className="text-xs text-zinc-400 font-normal">
@@ -72,24 +73,24 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-lg p-0.5 shadow-sm">
             <button
               onClick={() => onUpdateBooster({ bypassDsp: true })}
-              className={`px-3 py-1.5 text-xs font-mono font-medium rounded-md transition-all flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 text-xs font-mono font-medium rounded-md transition-all flex items-center gap-1.5 cursor-pointer ${
                 booster.bypassDsp
                   ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700'
                   : 'text-zinc-400 hover:text-zinc-200'
               }`}
-              title="Bypass all processing to hear original raw audio"
+              title="Bypass all processing to hear original raw audio [Shortcut: B]"
             >
               <span className={`w-2 h-2 rounded-full ${booster.bypassDsp ? 'bg-amber-400' : 'bg-zinc-600'}`} />
               Raw Dry
             </button>
             <button
               onClick={() => onUpdateBooster({ bypassDsp: false })}
-              className={`px-3 py-1.5 text-xs font-mono font-medium rounded-md transition-all flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 text-xs font-mono font-medium rounded-md transition-all flex items-center gap-1.5 cursor-pointer ${
                 !booster.bypassDsp
                   ? 'bg-amber-500/20 text-amber-300 shadow-sm border border-amber-500/40 font-semibold'
                   : 'text-zinc-400 hover:text-zinc-200'
               }`}
-              title="Activate full volume boost, clarity enhancer, and 10-band EQ"
+              title="Activate full volume boost, clarity enhancer, and 10-band EQ [Shortcut: B]"
             >
               <span className={`w-2 h-2 rounded-full ${!booster.bypassDsp ? 'bg-cyan-400 animate-pulse' : 'bg-zinc-600'}`} />
               Boosted & Clear
@@ -103,7 +104,7 @@ export const Header: React.FC<HeaderProps> = ({
                 ? 'bg-emerald-950/30 border-emerald-800/40 text-emerald-300'
                 : 'bg-zinc-900 border-zinc-800 text-zinc-500'
             }`}
-            title={booster.limiterActive ? 'Anti-Clip Limiter is active' : 'Limiter is off'}
+            title={booster.limiterActive ? 'Anti-Clip Limiter is active [Shortcut: L]' : 'Limiter is off'}
           >
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
             <span className="text-[11px]">SAFE-PEAK</span>
@@ -113,7 +114,7 @@ export const Header: React.FC<HeaderProps> = ({
           {recordedBlob ? (
             <button
               onClick={onDownloadRecording}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-600/20 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-600/30 text-xs font-mono font-medium transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-600/20 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-600/30 text-xs font-mono font-medium transition-colors cursor-pointer"
               title="Download recorded enhanced audio file"
             >
               <Disc className="w-3.5 h-3.5 animate-spin" />
@@ -122,7 +123,7 @@ export const Header: React.FC<HeaderProps> = ({
           ) : (
             <button
               onClick={onToggleRecord}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-mono transition-colors ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-mono transition-colors cursor-pointer ${
                 isRecording
                   ? 'bg-rose-950/40 border-rose-600 text-rose-300 animate-pulse'
                   : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-zinc-100'
@@ -137,12 +138,12 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Master Mute Toggle */}
           <button
             onClick={() => onUpdateBooster({ masterMute: !booster.masterMute })}
-            className={`p-2 rounded-lg border transition-colors ${
+            className={`p-2 rounded-lg border transition-colors cursor-pointer ${
               booster.masterMute
                 ? 'bg-rose-950/40 border-rose-800/50 text-rose-400'
                 : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-zinc-100'
             }`}
-            title={booster.masterMute ? 'Unmute master' : 'Mute master'}
+            title={booster.masterMute ? 'Unmute master [Shortcut: M]' : 'Mute master [Shortcut: M]'}
           >
             {booster.masterMute ? (
               <VolumeX className="w-4 h-4 text-rose-400" />
@@ -154,19 +155,19 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Reset All */}
           <button
             onClick={onResetAll}
-            className="p-2 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700 transition-colors"
-            title="Reset All EQ & Booster Settings to Default"
+            className="p-2 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700 transition-colors cursor-pointer"
+            title="Reset All Settings to Default [Shortcut: R]"
           >
             <RotateCcw className="w-4 h-4" />
           </button>
 
-          {/* Guide / Info */}
+          {/* Shortcuts & Guide Toggle */}
           <button
             onClick={onToggleHelp}
-            className="hidden md:flex p-2 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700 transition-colors"
-            title="Acoustic Clarity Guide & Tips"
+            className="hidden md:flex items-center gap-1.5 p-2 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700 transition-colors cursor-pointer"
+            title="Shortcuts & Acoustic Engineering Guide"
           >
-            <HelpCircle className="w-4 h-4" />
+            <Keyboard className="w-4 h-4" />
           </button>
         </div>
       </div>

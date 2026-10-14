@@ -7,6 +7,9 @@ import {
   Headphones,
   Laptop,
   CheckCircle2,
+  Keyboard,
+  Moon,
+  Ear,
 } from 'lucide-react';
 
 interface HelpModalProps {
@@ -38,14 +41,48 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
 
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors"
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Content sections */}
-        <div className="flex flex-col gap-4 text-xs leading-relaxed text-zinc-300">
+        <div className="flex flex-col gap-4 text-xs leading-relaxed text-zinc-300 max-h-[70vh] overflow-y-auto pr-1">
+          {/* Keyboard Shortcuts */}
+          <div className="bg-zinc-950/70 border border-zinc-800/90 rounded-xl p-3.5 flex flex-col gap-2">
+            <div className="flex items-center gap-2 text-zinc-200 font-semibold font-mono text-sm">
+              <Keyboard className="w-4 h-4 text-cyan-400" />
+              <span>Keyboard Shortcuts</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1 font-mono text-[11px]">
+              <div className="flex items-center justify-between bg-zinc-900 px-2.5 py-1.5 rounded border border-zinc-800">
+                <span className="text-zinc-400">Play / Pause</span>
+                <kbd className="px-1.5 py-0.5 bg-zinc-800 text-zinc-200 rounded text-[10px]">Space</kbd>
+              </div>
+              <div className="flex items-center justify-between bg-zinc-900 px-2.5 py-1.5 rounded border border-zinc-800">
+                <span className="text-zinc-400">A/B Compare</span>
+                <kbd className="px-1.5 py-0.5 bg-zinc-800 text-zinc-200 rounded text-[10px]">B</kbd>
+              </div>
+              <div className="flex items-center justify-between bg-zinc-900 px-2.5 py-1.5 rounded border border-zinc-800">
+                <span className="text-zinc-400">Master Mute</span>
+                <kbd className="px-1.5 py-0.5 bg-zinc-800 text-zinc-200 rounded text-[10px]">M</kbd>
+              </div>
+              <div className="flex items-center justify-between bg-zinc-900 px-2.5 py-1.5 rounded border border-zinc-800">
+                <span className="text-zinc-400">Anti-Clip Limiter</span>
+                <kbd className="px-1.5 py-0.5 bg-zinc-800 text-zinc-200 rounded text-[10px]">L</kbd>
+              </div>
+              <div className="flex items-center justify-between bg-zinc-900 px-2.5 py-1.5 rounded border border-zinc-800">
+                <span className="text-zinc-400">Reset All</span>
+                <kbd className="px-1.5 py-0.5 bg-zinc-800 text-zinc-200 rounded text-[10px]">R</kbd>
+              </div>
+              <div className="flex items-center justify-between bg-zinc-900 px-2.5 py-1.5 rounded border border-zinc-800">
+                <span className="text-zinc-400">Boost Level</span>
+                <kbd className="px-1.5 py-0.5 bg-zinc-800 text-zinc-200 rounded text-[10px]">↑ / ↓</kbd>
+              </div>
+            </div>
+          </div>
+
           {/* 1. Safe Volume Boosting */}
           <div className="bg-zinc-950/60 border border-zinc-800/80 rounded-xl p-3.5 flex flex-col gap-2">
             <div className="flex items-center gap-2 text-amber-400 font-semibold font-mono text-sm">
@@ -72,7 +109,7 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
           <div className="bg-zinc-950/60 border border-zinc-800/80 rounded-xl p-3.5 flex flex-col gap-2">
             <div className="flex items-center gap-2 text-cyan-400 font-semibold font-mono text-sm">
               <Mic className="w-4 h-4" />
-              <span>Dialogue Clarity & Mud Removal</span>
+              <span>Dialogue Clarity, De-Esser & Mud Removal</span>
             </div>
             <p>
               Why are movies and podcasts often hard to understand? Background music, explosive sound effects, and muddy room acoustics mask human vocal articulation.
@@ -82,7 +119,16 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
                 <strong className="text-zinc-200">Speech Focus (2.4 kHz):</strong> Amplifies the human consonant formant spectrum responsible for crisp consonants (/t/, /k/, /s/, /p/) so whispers and quiet lines cut cleanly through dense soundtracks.
               </li>
               <li>
-                <strong className="text-zinc-200">Boxiness Cut (320 Hz):</strong> Attenuates hollow cardboard resonance and room reverberation.
+                <strong className="text-zinc-200 flex items-center gap-1">
+                  <Ear className="w-3.5 h-3.5 text-teal-400 inline" />
+                  Sibilance Tamer (6.5 kHz):
+                </strong> Tames harsh, piercing &quot;S&quot; and &quot;Sh&quot; sounds that often irritate ears when media volume is boosted.
+              </li>
+              <li>
+                <strong className="text-zinc-200 flex items-center gap-1">
+                  <Moon className="w-3.5 h-3.5 text-indigo-400 inline" />
+                  Night Cinema Mode:
+                </strong> Dynamic range leveler automatically boosts quiet whispers while clamping sudden explosions.
               </li>
               <li>
                 <strong className="text-zinc-200">Subsonic Rumble Cleaner (65 Hz Cut):</strong> Small laptop speakers vibrate uncontrollably when asked to play 40Hz rumble from movies or air conditioning. Cutting this frees speaker power for clear vocals!
@@ -122,11 +168,11 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
         <div className="flex items-center justify-between pt-3 border-t border-zinc-800">
           <span className="text-[11px] text-zinc-500 font-mono flex items-center gap-1">
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-            100% Client-side Web Audio Processing
+            100% Client-side Web Audio DSP Engine
           </span>
           <button
             onClick={onClose}
-            className="px-4 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-100 font-mono text-xs font-semibold transition-colors"
+            className="px-4 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-100 font-mono text-xs font-semibold transition-colors cursor-pointer"
           >
             Got It
           </button>

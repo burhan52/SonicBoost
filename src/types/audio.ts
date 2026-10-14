@@ -17,6 +17,8 @@ export interface EqPreset {
   trebleSheen?: number; // 0 - 100
   bassPunch?: number; // 0 - 100
   rumbleCut?: boolean;
+  sibilanceTamer?: number; // 0 - 100
+  nightMode?: boolean;
 }
 
 export interface ClaritySettings {
@@ -25,6 +27,8 @@ export interface ClaritySettings {
   bassPunch: number; // 0 to 100
   rumbleCut: boolean; // cuts <60Hz
   spatialWidth: number; // 0 (mono) to 200 (wide), default 100
+  sibilanceTamer: number; // 0 to 100 (de-esser)
+  nightMode: boolean; // dynamic range compression for movies/dialogue
 }
 
 export interface BoosterSettings {
@@ -35,6 +39,8 @@ export interface BoosterSettings {
   bypassDsp: boolean; // A/B comparison bypass
   masterMute: boolean;
   masterVolume: number; // 0 to 1
+  stereoBalance: number; // -100 (left) to 100 (right), 0 center
+  playbackSpeed: number; // 0.5 to 2.0
 }
 
 export type VisualizerMode = 'bars' | 'curve' | 'oscilloscope' | 'spectrum-glow';

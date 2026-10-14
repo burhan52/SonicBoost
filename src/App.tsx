@@ -12,7 +12,6 @@ import { EqualizerRack } from './components/EqualizerRack';
 import { VisualizerConsole } from './components/VisualizerConsole';
 import { HelpModal } from './components/HelpModal';
 import { audioEngine } from './audio/AudioEngine';
-import { DEFAULT_PRESETS } from './audio/presets';
 import {
   BoosterSettings,
   ClaritySettings,
@@ -23,13 +22,15 @@ import {
 export default function App() {
   // Booster & Master settings
   const [booster, setBooster] = useState<BoosterSettings>({
-    boostMultiplier: 1.6, // 160% initial boost
+    boostMultiplier: 1.6, // 160% initial boost (+4.1 dB)
     preampGain: 0,
     limiterActive: true,
     saturationActive: true,
     bypassDsp: false,
     masterMute: false,
     masterVolume: 0.9,
+    stereoBalance: 0,
+    playbackSpeed: 1.0,
   });
 
   // Media Clarity settings
@@ -39,12 +40,14 @@ export default function App() {
     bassPunch: 25,
     rumbleCut: true,
     spatialWidth: 110,
+    sibilanceTamer: 50,
+    nightMode: false,
   });
 
-  // 10-Band EQ gains
+  // 10-Band EQ gains (defaults to Dialogue Clarity preset)
   const [eqGains, setEqGains] = useState<number[]>([
     -3, -2, -1, -3, 1, 3.5, 4.5, 3, 2, 0.5,
-  ]); // Defaults to Dialogue Clarity preset
+  ]);
   const [activePresetId, setActivePresetId] = useState<string | null>('dialogue-clarity');
 
   // Real-time VU meter data
@@ -61,7 +64,7 @@ export default function App() {
   const [isRecording, setIsRecording] = useState<boolean>(false);
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
 
-  // Help Modal state
+  // Help & Shortcuts Modal state
   const [isHelpOpen, setIsHelpOpen] = useState<boolean>(false);
 
   // Update AudioEngine when booster state changes
@@ -90,7 +93,7 @@ export default function App() {
       audioEngine.setEqBandGain(index, val);
       return next;
     });
-    setActivePresetId(null); // User manually tweaked a fader
+    setActivePresetId(null);
   }, []);
 
   // Apply full EQ preset
@@ -99,20 +102,20 @@ export default function App() {
     audioEngine.setEqGains(preset.gains);
     setActivePresetId(preset.id);
 
-    // If preset includes specialized clarity parameters, apply them
-    if (preset.clarityBoost !== undefined || preset.trebleSheen !== undefined) {
-      setClarity((prev) => {
-        const next: ClaritySettings = {
-          ...prev,
-          voiceClarity: preset.clarityBoost ?? prev.voiceClarity,
-          trebleSheen: preset.trebleSheen ?? prev.trebleSheen,
-          bassPunch: preset.bassPunch ?? prev.bassPunch,
-          rumbleCut: preset.rumbleCut ?? prev.rumbleCut,
-        };
-        audioEngine.setClaritySettings(next);
-        return next;
-      });
-    }
+    // Apply specialized preset settings if present
+    setClarity((prev) => {
+      const next: ClaritySettings = {
+        ...prev,
+        voiceClarity: preset.clarityBoost ?? prev.voiceClarity,
+        trebleSheen: preset.trebleSheen ?? prev.trebleSheen,
+        bassPunch: preset.bassPunch ?? prev.bassPunch,
+        rumbleCut: preset.rumbleCut ?? prev.rumbleCut,
+        sibilanceTamer: preset.sibilanceTamer ?? prev.sibilanceTamer,
+        nightMode: preset.nightMode ?? prev.nightMode,
+      };
+      audioEngine.setClaritySettings(next);
+      return next;
+    });
   }, []);
 
   // Reset all parameters to initial clean default
@@ -125,6 +128,8 @@ export default function App() {
       bypassDsp: false,
       masterMute: false,
       masterVolume: 0.9,
+      stereoBalance: 0,
+      playbackSpeed: 1.0,
     };
     const defaultClarity: ClaritySettings = {
       voiceClarity: 0,
@@ -132,6 +137,8 @@ export default function App() {
       bassPunch: 0,
       rumbleCut: false,
       spatialWidth: 100,
+      sibilanceTamer: 0,
+      nightMode: false,
     };
     const flatGains = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
@@ -176,7 +183,48 @@ export default function App() {
     setRecordedBlob(null);
   };
 
-  // Poll VU Meter at 30-60fps
+  // Global Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if user is typing in an input field
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
+        return;
+      }
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (audioEngine.isBufferPlaying) {
+          audioEngine.pauseBuffer();
+        } else {
+          audioEngine.resumeBuffer('muffled');
+        }
+      } else if (e.key === 'b' || e.key === 'B') {
+        handleUpdateBooster({ bypassDsp: !booster.bypassDsp });
+      } else if (e.key === 'm' || e.key === 'M') {
+        handleUpdateBooster({ masterMute: !booster.masterMute });
+      } else if (e.key === 'l' || e.key === 'L') {
+        handleUpdateBooster({ limiterActive: !booster.limiterActive });
+      } else if (e.key === 'r' || e.key === 'R') {
+        handleResetAll();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        handleUpdateBooster({
+          boostMultiplier: Math.min(3.0, booster.boostMultiplier + 0.1),
+        });
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        handleUpdateBooster({
+          boostMultiplier: Math.max(1.0, booster.boostMultiplier - 0.1),
+        });
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [booster, handleUpdateBooster, handleResetAll]);
+
+  // Poll VU Meter at 60fps
   useEffect(() => {
     let animId: number;
 
@@ -189,11 +237,6 @@ export default function App() {
     animId = requestAnimationFrame(pollMeters);
     return () => cancelAnimationFrame(animId);
   }, []);
-
-  // Master volume slider handler
-  const handleVolumeChange = (vol: number) => {
-    handleUpdateBooster({ masterVolume: vol });
-  };
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans selection:bg-amber-500/30 selection:text-amber-200">
@@ -215,7 +258,9 @@ export default function App() {
         <MediaPlayer
           onAudioStart={() => audioEngine.initContext()}
           masterVolume={booster.masterVolume}
-          onVolumeChange={handleVolumeChange}
+          onVolumeChange={(vol) => handleUpdateBooster({ masterVolume: vol })}
+          playbackSpeed={booster.playbackSpeed}
+          onSpeedChange={(speed) => handleUpdateBooster({ playbackSpeed: speed })}
         />
 
         {/* Row 2: Booster Rack & Clarity Enhancer */}
@@ -231,7 +276,7 @@ export default function App() {
           />
         </div>
 
-        {/* Row 3: 10-Band Precision Equalizer */}
+        {/* Row 3: 10-Band Precision Equalizer (Interactive Drag & Drop curve) */}
         <EqualizerRack
           gains={eqGains}
           onGainChange={handleGainChange}
@@ -246,11 +291,11 @@ export default function App() {
       {/* Acoustic Engineering & Quick Help Modal */}
       <HelpModal isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} />
 
-      {/* Quiet Minimal Footer */}
+      {/* Minimal Footer */}
       <footer className="border-t border-zinc-900 bg-zinc-950 px-4 py-4 text-center text-xs text-zinc-400 font-mono">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
-          <span>AuraBoost · Web Audio API 32-bit Floating DSP Engine</span>
-          <span>Zero Server Latency · Anti-Clip Protected</span>
+          <span>AuraBoost · 32-bit Floating Web Audio DSP Studio Engine</span>
+          <span>Zero Latency · True Mid-Side Stereo Spatializer</span>
         </div>
       </footer>
     </div>

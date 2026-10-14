@@ -10,6 +10,7 @@ import {
   Radio,
   Video,
   Volume2,
+  Gauge,
 } from 'lucide-react';
 import { audioEngine } from '../audio/AudioEngine';
 
@@ -17,6 +18,8 @@ interface MediaPlayerProps {
   onAudioStart: () => void;
   masterVolume: number;
   onVolumeChange: (vol: number) => void;
+  playbackSpeed: number;
+  onSpeedChange: (speed: number) => void;
 }
 
 interface DemoTrackItem {
@@ -65,10 +68,14 @@ const DEMO_TRACKS: DemoTrackItem[] = [
   },
 ];
 
+const SPEED_OPTIONS = [0.75, 1.0, 1.25, 1.5, 2.0];
+
 export const MediaPlayer: React.FC<MediaPlayerProps> = ({
   onAudioStart,
   masterVolume,
   onVolumeChange,
+  playbackSpeed,
+  onSpeedChange,
 }) => {
   const [sourceType, setSourceType] = useState<'demo' | 'file' | 'mic'>('demo');
   const [selectedDemoId, setSelectedDemoId] = useState<string>('muffled');
@@ -86,12 +93,21 @@ export const MediaPlayer: React.FC<MediaPlayerProps> = ({
 
   // Mic state
   const [isMicActive, setIsMicActive] = useState<boolean>(false);
-  const [micWarningDismissed, setMicWarningDismissed] = useState<boolean>(false);
 
   // Media element refs
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
   const videoElementRef = useRef<HTMLVideoElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Sync playback state from audioEngine (so buttons don't get stuck on Pause when track ends)
+  useEffect(() => {
+    audioEngine.onPlaybackStateChange = (playing) => {
+      setIsPlaying(playing);
+    };
+    return () => {
+      audioEngine.onPlaybackStateChange = undefined;
+    };
+  }, []);
 
   // Position update interval
   useEffect(() => {
@@ -193,7 +209,6 @@ export const MediaPlayer: React.FC<MediaPlayerProps> = ({
     setIsPlaying(false);
     setSourceType('file');
 
-    // Stop demo buffer if playing
     audioEngine.stopBuffer();
   };
 
@@ -288,22 +303,43 @@ export const MediaPlayer: React.FC<MediaPlayerProps> = ({
           </button>
         </div>
 
-        {/* Master Output Volume Fader */}
-        <div className="flex items-center gap-2 w-full sm:w-auto">
-          <Volume2 className="w-4 h-4 text-zinc-400 shrink-0" />
-          <span className="text-xs font-mono text-zinc-400 w-12 text-right">
-            {Math.round(masterVolume * 100)}%
-          </span>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            value={masterVolume}
-            onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
-            className="w-24 sm:w-28 accent-amber-500 cursor-pointer h-1.5 bg-zinc-800 rounded-lg"
-            title="Master Listening Volume"
-          />
+        {/* Playback Speed & Master Output Volume */}
+        <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto justify-end">
+          {/* Speed Selector */}
+          <div className="flex items-center gap-1 bg-zinc-950 px-1.5 py-1 rounded-lg border border-zinc-800 text-xs font-mono">
+            <Gauge className="w-3.5 h-3.5 text-zinc-400 ml-1" />
+            {SPEED_OPTIONS.map((spd) => (
+              <button
+                key={spd}
+                onClick={() => onSpeedChange(spd)}
+                className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${
+                  playbackSpeed === spd
+                    ? 'bg-amber-500/20 text-amber-300 font-bold'
+                    : 'text-zinc-500 hover:text-zinc-300'
+                }`}
+              >
+                {spd}x
+              </button>
+            ))}
+          </div>
+
+          {/* Master Volume Fader */}
+          <div className="flex items-center gap-2">
+            <Volume2 className="w-4 h-4 text-zinc-400 shrink-0" />
+            <span className="text-xs font-mono text-zinc-400 w-10 text-right">
+              {Math.round(masterVolume * 100)}%
+            </span>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={masterVolume}
+              onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
+              className="w-20 sm:w-24 accent-amber-500 cursor-pointer h-1.5 bg-zinc-800 rounded-lg"
+              title="Master Listening Volume"
+            />
+          </div>
         </div>
       </div>
 
@@ -411,7 +447,7 @@ export const MediaPlayer: React.FC<MediaPlayerProps> = ({
                 </button>
               </div>
 
-              {/* Synchronized Video Preview if video */}
+              {/* Synchronized Video Preview */}
               {isVideoFile && (
                 <div className="relative rounded-lg overflow-hidden bg-black max-h-56 flex items-center justify-center border border-zinc-800">
                   <video
@@ -466,11 +502,9 @@ export const MediaPlayer: React.FC<MediaPlayerProps> = ({
               <p className="text-xs text-zinc-400">
                 Test real-time speech enhancement, noise filtering, and volume boosting through your microphone.
               </p>
-              {!micWarningDismissed && (
-                <p className="text-[11px] text-amber-400/90 mt-1">
-                  Tip: Please use headphones while speaking to avoid acoustic feedback loops with your speakers.
-                </p>
-              )}
+              <p className="text-[11px] text-amber-400/90 mt-1">
+                Tip: Please use headphones while speaking to avoid acoustic feedback loops with your speakers.
+              </p>
             </div>
           </div>
 
@@ -487,21 +521,25 @@ export const MediaPlayer: React.FC<MediaPlayerProps> = ({
         </div>
       )}
 
-      {/* Shared Transport Bar (for Demo and Uploaded Media) */}
+      {/* Shared Transport Bar */}
       {sourceType !== 'mic' && (
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-1 border-t border-zinc-800/60">
           {/* Main Play / Pause and Loop Controls */}
           <div className="flex items-center gap-3 w-full sm:w-auto">
             <button
               onClick={sourceType === 'demo' ? togglePlayDemo : togglePlayUploaded}
-              className={`p-3 rounded-xl transition-all shadow-md flex items-center justify-center ${
+              className={`p-3 rounded-xl transition-all shadow-md flex items-center justify-center cursor-pointer ${
                 isPlaying
                   ? 'bg-amber-500 hover:bg-amber-400 text-zinc-950 shadow-amber-500/20'
                   : 'bg-zinc-100 hover:bg-white text-zinc-900'
               }`}
-              title={isPlaying ? 'Pause' : 'Play'}
+              title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
             >
-              {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
+              {isPlaying ? (
+                <Pause className="w-5 h-5 fill-current" />
+              ) : (
+                <Play className="w-5 h-5 fill-current ml-0.5" />
+              )}
             </button>
 
             <button
@@ -535,17 +573,19 @@ export const MediaPlayer: React.FC<MediaPlayerProps> = ({
             </div>
           </div>
 
-          {/* Interactive Timeline Scrubber */}
-          <div className="flex-1 w-full max-w-xl flex items-center gap-2">
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.005"
-              value={playbackPos.total > 0 ? playbackPos.current / playbackPos.total : 0}
-              onChange={(e) => handleSeek(parseFloat(e.target.value))}
-              className="w-full accent-amber-500 cursor-pointer h-2 bg-zinc-950 rounded-lg border border-zinc-800"
-            />
+          {/* Interactive Timeline Scrubber with simulated audio wave tick markers */}
+          <div className="flex-1 w-full max-w-xl flex items-center gap-2 relative">
+            <div className="w-full relative flex items-center">
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.005"
+                value={playbackPos.total > 0 ? playbackPos.current / playbackPos.total : 0}
+                onChange={(e) => handleSeek(parseFloat(e.target.value))}
+                className="w-full accent-amber-500 cursor-pointer h-2.5 bg-zinc-950 rounded-lg border border-zinc-800"
+              />
+            </div>
           </div>
         </div>
       )}

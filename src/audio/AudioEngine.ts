@@ -18,38 +18,53 @@ export class AudioEngine {
   public ctx: AudioContext | null = null;
   private isInitialized = false;
 
-  // Nodes in DSP Chain
-  private mediaElementSource: MediaElementAudioSourceNode | null = null;
+  // Attached media elements tracking (WeakMap to prevent InvalidStateError on re-attachment)
+  private mediaSourceMap = new WeakMap<HTMLMediaElement, MediaElementAudioSourceNode>();
+  private currentAttachedElement: HTMLMediaElement | null = null;
+  private currentMediaSourceNode: MediaElementAudioSourceNode | null = null;
+
+  // Live microphone source
   private micStreamSource: MediaStreamAudioSourceNode | null = null;
+
+  // Buffer playback source
   private bufferSource: AudioBufferSourceNode | null = null;
   private currentBuffer: AudioBuffer | null = null;
 
+  // DSP Nodes
   private inputGain: GainNode | null = null;
   private rumbleFilter: BiquadFilterNode | null = null;
   private eqFilters: BiquadFilterNode[] = [];
   private boxinessCutFilter: BiquadFilterNode | null = null;
   private voiceClarityFilter: BiquadFilterNode | null = null;
+  private sibilanceFilter: BiquadFilterNode | null = null;
   private trebleSheenFilter: BiquadFilterNode | null = null;
   private bassPunchFilter: BiquadFilterNode | null = null;
-  
-  // Stereo Widener nodes (Mid-Side matrix)
+
+  // Night Mode / Dialogue Dynamic Range Leveler
+  private dialogueLeveler: DynamicsCompressorNode | null = null;
+
+  // Stereo Widener matrix (Mid-Side crossfeed)
   private spatialSplitter: ChannelSplitterNode | null = null;
   private spatialMerger: ChannelMergerNode | null = null;
-  private sideGainL: GainNode | null = null;
-  private sideGainR: GainNode | null = null;
+  private directGainL: GainNode | null = null;
+  private directGainR: GainNode | null = null;
+  private crossfeedLR: GainNode | null = null;
+  private crossfeedRL: GainNode | null = null;
 
-  // Booster and Limiter
+  // Volume Booster, Saturation, Limiter
   private boosterGain: GainNode | null = null;
   private waveShaper: WaveShaperNode | null = null;
-  private waveShaperBypass: GainNode | null = null;
+  private saturationCurve: Float32Array | null = null;
+  private linearCurve: Float32Array | null = null;
   private limiter: DynamicsCompressorNode | null = null;
 
-  // Dry/Wet Bypass for A/B testing
+  // Stereo Balance & Master
+  private stereoPanner: StereoPannerNode | null = null;
   private dryGain: GainNode | null = null;
   private wetGain: GainNode | null = null;
-
-  // Master output
   private masterGain: GainNode | null = null;
+
+  // Analysers
   private analyser: AnalyserNode | null = null;
   private leftAnalyser: AnalyserNode | null = null;
   private rightAnalyser: AnalyserNode | null = null;
@@ -66,6 +81,7 @@ export class AudioEngine {
   private bufferPausedAt = 0;
   public isBufferPlaying = false;
   public isBufferLooping = true;
+  public onPlaybackStateChange?: (isPlaying: boolean) => void;
 
   // Analysis arrays
   private frequencyData: Uint8Array | null = null;
@@ -76,22 +92,26 @@ export class AudioEngine {
   // Current State Cache
   private currentBypass = false;
   private currentBooster: BoosterSettings = {
-    boostMultiplier: 1.5,
+    boostMultiplier: 1.6,
     preampGain: 0,
     limiterActive: true,
     saturationActive: true,
     bypassDsp: false,
     masterMute: false,
-    masterVolume: 1.0,
+    masterVolume: 0.9,
+    stereoBalance: 0,
+    playbackSpeed: 1.0,
   };
   private currentClarity: ClaritySettings = {
     voiceClarity: 70,
     trebleSheen: 45,
-    bassPunch: 30,
+    bassPunch: 25,
     rumbleCut: true,
     spatialWidth: 110,
+    sibilanceTamer: 50,
+    nightMode: false,
   };
-  private currentEqGains: number[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+  private currentEqGains: number[] = [-3, -2, -1, -3, 1, 3.5, 4.5, 3, 2, 0.5];
 
   public static getInstance(): AudioEngine {
     if (!AudioEngine.instance) {
@@ -101,12 +121,14 @@ export class AudioEngine {
   }
 
   private constructor() {
-    // Initialized on first user interaction to comply with autoplay policy
+    // Initialized on user interaction
   }
 
   public async initContext(): Promise<AudioContext> {
     if (!this.ctx) {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.ctx = new AudioCtx();
     }
 
@@ -130,11 +152,11 @@ export class AudioEngine {
     this.inputGain = ctx.createGain();
     this.inputGain.gain.value = 1.0;
 
-    // 2. Rumble Highpass Filter (steep highpass at 60Hz)
+    // 2. Rumble Highpass Filter (65Hz steep highpass)
     this.rumbleFilter = ctx.createBiquadFilter();
     this.rumbleFilter.type = 'highpass';
-    this.rumbleFilter.frequency.value = 60;
-    this.rumbleFilter.Q.value = 0.707;
+    this.rumbleFilter.frequency.value = 65;
+    this.rumbleFilter.Q.value = 0.8;
 
     // 3. 10-Band EQ Filters
     this.eqFilters = EQ_FREQUENCIES.map((freq, idx) => {
@@ -167,6 +189,13 @@ export class AudioEngine {
     this.voiceClarityFilter.Q.value = 1.4;
     this.voiceClarityFilter.gain.value = 4.5;
 
+    // Sibilance Tamer / De-Esser (6.5kHz notch/peaking)
+    this.sibilanceFilter = ctx.createBiquadFilter();
+    this.sibilanceFilter.type = 'peaking';
+    this.sibilanceFilter.frequency.value = 6500;
+    this.sibilanceFilter.Q.value = 2.5;
+    this.sibilanceFilter.gain.value = -3.0;
+
     // Treble Sheen (high shelf at 9kHz for dull speaker air)
     this.trebleSheenFilter = ctx.createBiquadFilter();
     this.trebleSheenFilter.type = 'highshelf';
@@ -179,43 +208,61 @@ export class AudioEngine {
     this.bassPunchFilter.frequency.value = 95;
     this.bassPunchFilter.gain.value = 2.0;
 
-    // 5. Stereo Widener (Mid-Side processing)
+    // 5. Night Mode / Dialogue Dynamic Range Leveler
+    this.dialogueLeveler = ctx.createDynamicsCompressor();
+    this.dialogueLeveler.threshold.value = -24.0;
+    this.dialogueLeveler.knee.value = 6.0;
+    this.dialogueLeveler.ratio.value = 1.0; // off by default
+    this.dialogueLeveler.attack.value = 0.02;
+    this.dialogueLeveler.release.value = 0.25;
+
+    // 6. Stereo Widener (Mid-Side crossfeed matrix)
     this.spatialSplitter = ctx.createChannelSplitter(2);
     this.spatialMerger = ctx.createChannelMerger(2);
-    this.sideGainL = ctx.createGain();
-    this.sideGainR = ctx.createGain();
-    this.sideGainL.gain.value = 1.0;
-    this.sideGainR.gain.value = 1.0;
+    this.directGainL = ctx.createGain();
+    this.directGainR = ctx.createGain();
+    this.crossfeedLR = ctx.createGain();
+    this.crossfeedRL = ctx.createGain();
 
-    // 6. Volume Booster Gain (100% to 300%)
+    this.directGainL.gain.value = 1.0;
+    this.directGainR.gain.value = 1.0;
+    this.crossfeedLR.gain.value = 0.0;
+    this.crossfeedRL.gain.value = 0.0;
+
+    // 7. Volume Booster Gain
     this.boosterGain = ctx.createGain();
-    this.boosterGain.gain.value = 1.5;
+    this.boosterGain.gain.value = 1.6;
 
-    // 7. Warm Soft-Knee Saturation (WaveShaper)
+    // 8. Warm Soft-Knee Saturation (WaveShaper)
+    this.saturationCurve = this.createSaturationCurve(256);
+    this.linearCurve = this.createLinearCurve(256);
     this.waveShaper = ctx.createWaveShaper();
-    this.waveShaper.curve = this.createSaturationCurve(256) as unknown as Float32Array<ArrayBuffer>;
+    this.waveShaper.curve = this.saturationCurve as unknown as Float32Array<ArrayBuffer>;
     this.waveShaper.oversample = '2x';
 
-    this.waveShaperBypass = ctx.createGain();
-    this.waveShaperBypass.gain.value = 0.0;
-
-    // 8. Dynamics Limiter (Safe Speaker Protection)
+    // 9. Dynamics Limiter (Safe Speaker Protection)
     this.limiter = ctx.createDynamicsCompressor();
     this.limiter.threshold.value = -1.0; // dB
-    this.limiter.knee.value = 3.0; // smooth knee
-    this.limiter.ratio.value = 20.0; // brickwall limit
+    this.limiter.knee.value = 3.0;
+    this.limiter.ratio.value = 20.0; // brickwall
     this.limiter.attack.value = 0.003; // 3ms fast catch
     this.limiter.release.value = 0.08; // 80ms recovery
 
-    // 9. Dry / Wet routing for A/B Bypass
+    // 10. Stereo Panner
+    if (ctx.createStereoPanner) {
+      this.stereoPanner = ctx.createStereoPanner();
+      this.stereoPanner.pan.value = 0;
+    }
+
+    // 11. Dry / Wet routing for A/B Bypass
     this.dryGain = ctx.createGain();
     this.wetGain = ctx.createGain();
     this.dryGain.gain.value = 0.0;
     this.wetGain.gain.value = 1.0;
 
-    // 10. Master Output and Analysis
+    // 12. Master Output & Analysis
     this.masterGain = ctx.createGain();
-    this.masterGain.gain.value = 1.0;
+    this.masterGain.gain.value = 0.9;
 
     this.analyser = ctx.createAnalyser();
     this.analyser.fftSize = 2048;
@@ -232,10 +279,9 @@ export class AudioEngine {
     this.leftTimeData = new Float32Array(this.leftAnalyser.fftSize);
     this.rightTimeData = new Float32Array(this.rightAnalyser.fftSize);
 
-    // Media stream destination for exporting/recording
     this.mediaStreamDestination = ctx.createMediaStreamDestination();
 
-    // WIRE UP DSP CHAIN:
+    // WIRE DSP CHAIN:
     // Input -> Dry Gain -> Master
     this.inputGain.connect(this.dryGain);
     this.dryGain.connect(this.masterGain);
@@ -250,31 +296,45 @@ export class AudioEngine {
       lastNode = eqNode;
     }
 
-    // EQ Chain -> Boxiness Cut -> Voice Clarity -> Treble Sheen -> Bass Punch
+    // EQ Chain -> Boxiness Cut -> Voice Clarity -> Sibilance Tamer -> Treble Sheen -> Bass Punch -> Dialogue Leveler
     lastNode.connect(this.boxinessCutFilter);
     this.boxinessCutFilter.connect(this.voiceClarityFilter);
-    this.voiceClarityFilter.connect(this.trebleSheenFilter);
+    this.voiceClarityFilter.connect(this.sibilanceFilter);
+    this.sibilanceFilter.connect(this.trebleSheenFilter);
     this.trebleSheenFilter.connect(this.bassPunchFilter);
-    lastNode = this.bassPunchFilter;
+    this.bassPunchFilter.connect(this.dialogueLeveler);
+    lastNode = this.dialogueLeveler;
 
-    // Spatial Widening Matrix
-    // Split stereo channels
+    // Spatial Widening Matrix (Mid-Side crossfeed)
     lastNode.connect(this.spatialSplitter);
-    this.spatialSplitter.connect(this.sideGainL, 0);
-    this.spatialSplitter.connect(this.sideGainR, 1);
-    this.sideGainL.connect(this.spatialMerger, 0, 0);
-    this.sideGainR.connect(this.spatialMerger, 0, 1);
+    // Left input splits to direct L and crossfeed to R
+    this.spatialSplitter.connect(this.directGainL, 0);
+    this.spatialSplitter.connect(this.crossfeedLR, 0);
+    // Right input splits to direct R and crossfeed to L
+    this.spatialSplitter.connect(this.directGainR, 1);
+    this.spatialSplitter.connect(this.crossfeedRL, 1);
 
-    // Booster Gain
+    // Merge into Output Channels
+    this.directGainL.connect(this.spatialMerger, 0, 0);
+    this.crossfeedRL.connect(this.spatialMerger, 0, 0);
+    this.directGainR.connect(this.spatialMerger, 0, 1);
+    this.crossfeedLR.connect(this.spatialMerger, 0, 1);
+
+    // Booster Gain -> WaveShaper -> Limiter -> Stereo Panner (if available) -> Wet Gain
     this.spatialMerger.connect(this.boosterGain);
-
-    // WaveShaper Saturation & Limiter
     this.boosterGain.connect(this.waveShaper);
     this.waveShaper.connect(this.limiter);
-    this.limiter.connect(this.wetGain);
+
+    if (this.stereoPanner) {
+      this.limiter.connect(this.stereoPanner);
+      this.stereoPanner.connect(this.wetGain);
+    } else {
+      this.limiter.connect(this.wetGain);
+    }
+
     this.wetGain.connect(this.masterGain);
 
-    // Master -> Output & Analysers
+    // Master -> Speakers, Analyser, Recording, VU Meters
     this.masterGain.connect(ctx.destination);
     this.masterGain.connect(this.analyser);
     this.masterGain.connect(this.mediaStreamDestination);
@@ -289,12 +349,19 @@ export class AudioEngine {
   private createSaturationCurve(samples: number): Float32Array {
     const curve = new Float32Array(samples);
     const deg = Math.PI / 180;
-    const k = 1.4; // subtle soft saturation amount
+    const k = 1.4;
 
     for (let i = 0; i < samples; ++i) {
       const x = (i * 2) / samples - 1;
-      // Soft saturation using tanh-like polynomial
       curve[i] = ((3 + k) * x * 20 * deg) / (Math.PI + k * Math.abs(x * 20 * deg));
+    }
+    return curve;
+  }
+
+  private createLinearCurve(samples: number): Float32Array {
+    const curve = new Float32Array(samples);
+    for (let i = 0; i < samples; ++i) {
+      curve[i] = (i * 2) / samples - 1;
     }
     return curve;
   }
@@ -302,16 +369,34 @@ export class AudioEngine {
   // --- Input Connections ---
 
   public attachMediaElement(element: HTMLMediaElement) {
-    if (!this.ctx) return;
-    try {
-      if (!this.mediaElementSource) {
-        this.mediaElementSource = this.ctx.createMediaElementSource(element);
-        if (this.inputGain) {
-          this.mediaElementSource.connect(this.inputGain);
-        }
+    if (!this.ctx || !this.inputGain) return;
+
+    if (this.currentAttachedElement === element) {
+      return;
+    }
+
+    // Disconnect previously active element source
+    if (this.currentMediaSourceNode) {
+      try {
+        this.currentMediaSourceNode.disconnect();
+      } catch {
+        // ignore
       }
+      this.currentMediaSourceNode = null;
+    }
+
+    try {
+      let sourceNode = this.mediaSourceMap.get(element);
+      if (!sourceNode) {
+        sourceNode = this.ctx.createMediaElementSource(element);
+        this.mediaSourceMap.set(element, sourceNode);
+      }
+
+      sourceNode.connect(this.inputGain);
+      this.currentMediaSourceNode = sourceNode;
+      this.currentAttachedElement = element;
+      element.playbackRate = this.currentBooster.playbackSpeed;
     } catch (err) {
-      // Element might already be attached or cross-origin
       console.warn('Media element attachment note:', err);
     }
   }
@@ -394,6 +479,7 @@ export class AudioEngine {
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
     source.loop = this.isBufferLooping;
+    source.playbackRate.value = this.currentBooster.playbackSpeed;
     source.connect(this.inputGain);
 
     const startTime = this.ctx.currentTime;
@@ -402,22 +488,26 @@ export class AudioEngine {
     this.bufferSource = source;
     this.bufferStartTime = startTime - (offset % buffer.duration);
     this.isBufferPlaying = true;
+    this.onPlaybackStateChange?.(true);
 
     source.onended = () => {
       if (!this.isBufferLooping) {
         this.isBufferPlaying = false;
         this.bufferPausedAt = 0;
+        this.onPlaybackStateChange?.(false);
       }
     };
   }
 
   public pauseBuffer() {
     if (this.bufferSource && this.ctx && this.isBufferPlaying) {
-      this.bufferPausedAt = (this.ctx.currentTime - this.bufferStartTime) % (this.currentBuffer?.duration || 1);
+      this.bufferPausedAt =
+        (this.ctx.currentTime - this.bufferStartTime) % (this.currentBuffer?.duration || 1);
       this.bufferSource.stop();
       this.bufferSource.disconnect();
       this.bufferSource = null;
       this.isBufferPlaying = false;
+      this.onPlaybackStateChange?.(false);
     }
   }
 
@@ -437,6 +527,7 @@ export class AudioEngine {
     }
     this.isBufferPlaying = false;
     this.bufferPausedAt = 0;
+    this.onPlaybackStateChange?.(false);
   }
 
   public getBufferPlaybackPosition(): { current: number; total: number } {
@@ -447,19 +538,6 @@ export class AudioEngine {
     }
     const current = (this.ctx.currentTime - this.bufferStartTime) % total;
     return { current: Math.max(0, current), total };
-  }
-
-  // --- Audio File Loading ---
-
-  public async loadAudioFileBuffer(file: File): Promise<AudioBuffer> {
-    await this.initContext();
-    if (!this.ctx) throw new Error('AudioContext missing');
-
-    const arrayBuffer = await file.arrayBuffer();
-    const audioBuffer = await this.ctx.decodeAudioData(arrayBuffer);
-    const key = `file-${file.name}-${file.size}`;
-    this.sampleBuffers.set(key, audioBuffer);
-    return audioBuffer;
   }
 
   // --- Real-time Parameter Updates ---
@@ -500,8 +578,7 @@ export class AudioEngine {
     this.currentBypass = bypass;
     if (!this.ctx || !this.dryGain || !this.wetGain) return;
     const now = this.ctx.currentTime;
-    
-    // Smooth crossfade to prevent clicks
+
     this.dryGain.gain.cancelScheduledValues(now);
     this.wetGain.gain.cancelScheduledValues(now);
 
@@ -524,10 +601,20 @@ export class AudioEngine {
       this.inputGain.gain.setTargetAtTime(preampLinear, now, 0.02);
     }
 
-    // Volume Boost (1.0x to 3.0x multiplier)
+    // Volume Boost
     if (this.boosterGain) {
       const targetGain = this.currentBooster.boostMultiplier;
       this.boosterGain.gain.setTargetAtTime(targetGain, now, 0.02);
+    }
+
+    // Saturation active / bypassed
+    if (this.waveShaper) {
+      const targetCurve = this.currentBooster.saturationActive
+        ? this.saturationCurve
+        : this.linearCurve;
+      if (targetCurve) {
+        this.waveShaper.curve = targetCurve as unknown as Float32Array<ArrayBuffer>;
+      }
     }
 
     // Limiter activation
@@ -536,9 +623,22 @@ export class AudioEngine {
         this.limiter.ratio.setTargetAtTime(20.0, now, 0.02);
         this.limiter.threshold.setTargetAtTime(-1.0, now, 0.02);
       } else {
-        // Transparent when limiter is off (1:1 ratio)
         this.limiter.ratio.setTargetAtTime(1.0, now, 0.02);
       }
+    }
+
+    // Stereo Panner
+    if (this.stereoPanner) {
+      const pan = Math.max(-1, Math.min(1, this.currentBooster.stereoBalance / 100));
+      this.stereoPanner.pan.setTargetAtTime(pan, now, 0.02);
+    }
+
+    // Playback Speed
+    if (this.bufferSource) {
+      this.bufferSource.playbackRate.setTargetAtTime(this.currentBooster.playbackSpeed, now, 0.02);
+    }
+    if (this.currentAttachedElement) {
+      this.currentAttachedElement.playbackRate = this.currentBooster.playbackSpeed;
     }
 
     // Master volume & mute
@@ -547,7 +647,7 @@ export class AudioEngine {
       this.masterGain.gain.setTargetAtTime(effectiveVolume, now, 0.02);
     }
 
-    // Update bypass if changed
+    // Bypass check
     if (this.currentBooster.bypassDsp !== this.currentBypass) {
       this.setBypassDsp(this.currentBooster.bypassDsp);
     }
@@ -557,13 +657,13 @@ export class AudioEngine {
     if (!this.ctx) return;
     const now = this.ctx.currentTime;
 
-    // 1. Rumble Cut (steep highpass)
+    // 1. Rumble Cut
     if (this.rumbleFilter) {
       if (this.currentClarity.rumbleCut) {
         this.rumbleFilter.frequency.setTargetAtTime(65, now, 0.02);
         this.rumbleFilter.Q.setTargetAtTime(0.8, now, 0.02);
       } else {
-        this.rumbleFilter.frequency.setTargetAtTime(10, now, 0.02); // below audible range
+        this.rumbleFilter.frequency.setTargetAtTime(10, now, 0.02);
       }
     }
 
@@ -573,30 +673,52 @@ export class AudioEngine {
       this.voiceClarityFilter.gain.setTargetAtTime(clarityDb, now, 0.02);
     }
 
-    // 3. Boxiness Cut (0 to 100 -> 0dB to -4dB at 320Hz to make dialogue crisp)
+    // 3. Boxiness Cut (0 to 100 -> 0dB to -4dB at 320Hz)
     if (this.boxinessCutFilter) {
       const cutDb = -((this.currentClarity.voiceClarity / 100) * 4.0);
       this.boxinessCutFilter.gain.setTargetAtTime(cutDb, now, 0.02);
     }
 
-    // 4. Treble Sheen (0 to 100 -> 0dB to +7.5dB at 9kHz)
+    // 4. Sibilance Tamer / De-Esser (0 to 100 -> 0dB to -6.5dB at 6.5kHz)
+    if (this.sibilanceFilter) {
+      const deEssDb = -((this.currentClarity.sibilanceTamer / 100) * 6.5);
+      this.sibilanceFilter.gain.setTargetAtTime(deEssDb, now, 0.02);
+    }
+
+    // 5. Treble Sheen (0 to 100 -> 0dB to +7.5dB at 9kHz)
     if (this.trebleSheenFilter) {
       const sheenDb = (this.currentClarity.trebleSheen / 100) * 7.5;
       this.trebleSheenFilter.gain.setTargetAtTime(sheenDb, now, 0.02);
     }
 
-    // 5. Bass Punch (0 to 100 -> 0dB to +8dB at 95Hz)
+    // 6. Bass Punch (0 to 100 -> 0dB to +8dB at 95Hz)
     if (this.bassPunchFilter) {
       const bassDb = (this.currentClarity.bassPunch / 100) * 8.0;
       this.bassPunchFilter.gain.setTargetAtTime(bassDb, now, 0.02);
     }
 
-    // 6. Spatial Width (0 mono to 200 wide, 100 normal)
-    if (this.sideGainL && this.sideGainR) {
-      const widthFactor = this.currentClarity.spatialWidth / 100;
-      // Pan spread adjustment
-      this.sideGainL.gain.setTargetAtTime(Math.min(1.5, 0.7 + widthFactor * 0.3), now, 0.02);
-      this.sideGainR.gain.setTargetAtTime(Math.min(1.5, 0.7 + widthFactor * 0.3), now, 0.02);
+    // 7. Night Mode / Dialogue Leveler
+    if (this.dialogueLeveler) {
+      if (this.currentClarity.nightMode) {
+        this.dialogueLeveler.ratio.setTargetAtTime(4.5, now, 0.02);
+        this.dialogueLeveler.threshold.setTargetAtTime(-22.0, now, 0.02);
+      } else {
+        this.dialogueLeveler.ratio.setTargetAtTime(1.0, now, 0.02);
+      }
+    }
+
+    // 8. Spatial Widening (Mid-Side crossfeed matrix)
+    // Width: 0 = mono, 100 = standard stereo, 200 = super-wide
+    if (this.directGainL && this.directGainR && this.crossfeedLR && this.crossfeedRL) {
+      const w = this.currentClarity.spatialWidth / 100;
+      // Formula: Direct = 0.5 * (1 + w), Crossfeed = 0.5 * (1 - w)
+      const direct = 0.5 * (1 + w);
+      const cross = 0.5 * (1 - w);
+
+      this.directGainL.gain.setTargetAtTime(direct, now, 0.02);
+      this.directGainR.gain.setTargetAtTime(direct, now, 0.02);
+      this.crossfeedLR.gain.setTargetAtTime(cross, now, 0.02);
+      this.crossfeedRL.gain.setTargetAtTime(cross, now, 0.02);
     }
   }
 
@@ -612,7 +734,9 @@ export class AudioEngine {
     if (!this.analyser || !this.frequencyData) {
       return new Uint8Array(64);
     }
-    this.analyser.getByteFrequencyData(this.frequencyData as unknown as Uint8Array<ArrayBuffer>);
+    this.analyser.getByteFrequencyData(
+      this.frequencyData as unknown as Uint8Array<ArrayBuffer>
+    );
     return this.frequencyData;
   }
 
@@ -620,12 +744,19 @@ export class AudioEngine {
     if (!this.analyser || !this.timeDomainData) {
       return new Uint8Array(128);
     }
-    this.analyser.getByteTimeDomainData(this.timeDomainData as unknown as Uint8Array<ArrayBuffer>);
+    this.analyser.getByteTimeDomainData(
+      this.timeDomainData as unknown as Uint8Array<ArrayBuffer>
+    );
     return this.timeDomainData;
   }
 
   public getVuMeterData(): VuMeterData {
-    if (!this.leftAnalyser || !this.rightAnalyser || !this.leftTimeData || !this.rightTimeData) {
+    if (
+      !this.leftAnalyser ||
+      !this.rightAnalyser ||
+      !this.leftTimeData ||
+      !this.rightTimeData
+    ) {
       return {
         leftRms: 0,
         rightRms: 0,
@@ -636,8 +767,12 @@ export class AudioEngine {
       };
     }
 
-    this.leftAnalyser.getFloatTimeDomainData(this.leftTimeData as unknown as Float32Array<ArrayBuffer>);
-    this.rightAnalyser.getFloatTimeDomainData(this.rightTimeData as unknown as Float32Array<ArrayBuffer>);
+    this.leftAnalyser.getFloatTimeDomainData(
+      this.leftTimeData as unknown as Float32Array<ArrayBuffer>
+    );
+    this.rightAnalyser.getFloatTimeDomainData(
+      this.rightTimeData as unknown as Float32Array<ArrayBuffer>
+    );
 
     let sumSquaresL = 0;
     let sumSquaresR = 0;
@@ -659,7 +794,6 @@ export class AudioEngine {
     const rmsL = Math.sqrt(sumSquaresL / len);
     const rmsR = Math.sqrt(sumSquaresR / len);
 
-    // Limit reduction in dB (limiter.reduction is a negative number or 0)
     const reduction = this.limiter ? Math.abs(this.limiter.reduction) : 0;
     const isClipping = peakL >= 0.99 || peakR >= 0.99;
 
@@ -681,8 +815,7 @@ export class AudioEngine {
     try {
       this.recordedChunks = [];
       const stream = this.mediaStreamDestination.stream;
-      const options = { mimeType: 'audio/webm;codecs=opus' };
-      
+
       let mimeType = 'audio/webm;codecs=opus';
       if (!MediaRecorder.isTypeSupported(mimeType)) {
         mimeType = 'audio/webm';
@@ -695,7 +828,7 @@ export class AudioEngine {
         }
       };
 
-      this.mediaRecorder.start(100); // 100ms chunks
+      this.mediaRecorder.start(100);
       this.isRecording = true;
       return true;
     } catch (err) {

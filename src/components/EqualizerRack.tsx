@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import {
   Sliders,
   Bookmark,
@@ -6,6 +6,8 @@ import {
   Trash2,
   RefreshCw,
   Check,
+  Download,
+  Upload,
 } from 'lucide-react';
 import { EQ_FREQUENCIES, EQ_LABELS, DEFAULT_PRESETS } from '../audio/presets';
 import { EqPreset } from '../types/audio';
@@ -24,6 +26,12 @@ export const EqualizerRack: React.FC<EqualizerRackProps> = ({
   activePresetId,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Dragging state on canvas
+  const [isDraggingCurve, setIsDraggingCurve] = useState(false);
+  const [activeDragBand, setActiveDragBand] = useState<number | null>(null);
+  const [hoveredBand, setHoveredBand] = useState<number | null>(null);
 
   // Custom User Presets in LocalStorage
   const [customPresets, setCustomPresets] = useState<EqPreset[]>(() => {
@@ -80,6 +88,129 @@ export const EqualizerRack: React.FC<EqualizerRackProps> = ({
     onApplyPreset(flatPreset);
   };
 
+  // Export Presets to JSON
+  const handleExportPresets = () => {
+    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(customPresets, null, 2));
+    const dlAnchor = document.createElement('a');
+    dlAnchor.setAttribute('href', dataStr);
+    dlAnchor.setAttribute('download', `auraboost-custom-presets-${Date.now()}.json`);
+    dlAnchor.click();
+  };
+
+  // Import Presets from JSON
+  const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const imported = JSON.parse(event.target?.result as string);
+        if (Array.isArray(imported)) {
+          const merged = [...customPresets, ...imported];
+          setCustomPresets(merged);
+          localStorage.setItem('auraboost_custom_presets', JSON.stringify(merged));
+          if (imported.length > 0) onApplyPreset(imported[0]);
+        }
+      } catch (err) {
+        console.error('Failed to import presets:', err);
+        alert('Invalid preset JSON file.');
+      }
+    };
+    reader.readAsText(files[0]);
+  };
+
+  // Map frequency to Canvas X coordinate
+  const getBandX = useCallback((freq: number, width: number) => {
+    const minLog = Math.log10(20);
+    const maxLog = Math.log10(20000);
+    const logF = Math.log10(freq);
+    const ratio = (logF - minLog) / (maxLog - minLog);
+    return 35 + ratio * (width - 45);
+  }, []);
+
+  // Map gain dB to Canvas Y coordinate
+  const getGainY = useCallback((gainDb: number, height: number) => {
+    const clamped = Math.max(-12, Math.min(12, gainDb));
+    return height * 0.5 - (clamped / 12) * (0.4 * height);
+  }, []);
+
+  // Map Canvas Y coordinate back to gain dB
+  const getYToGain = useCallback((y: number, height: number) => {
+    const normalized = (height * 0.5 - y) / (0.4 * height);
+    const db = normalized * 12;
+    return Math.max(-12, Math.min(12, Math.round(db * 2) / 2));
+  }, []);
+
+  // Mouse & Touch interaction on EQ Curve Canvas
+  const handleCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    // Find closest frequency band
+    let closestIdx = 0;
+    let minDistance = Infinity;
+
+    EQ_FREQUENCIES.forEach((freq, idx) => {
+      const bandX = getBandX(freq, rect.width);
+      const dist = Math.abs(bandX - x);
+      if (dist < minDistance) {
+        minDistance = dist;
+        closestIdx = idx;
+      }
+    });
+
+    const newGain = getYToGain(y, rect.height);
+    onGainChange(closestIdx, newGain);
+    setActiveDragBand(closestIdx);
+    setIsDraggingCurve(true);
+    canvas.setPointerCapture(e.pointerId);
+  };
+
+  const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    if (isDraggingCurve && activeDragBand !== null) {
+      const newGain = getYToGain(y, rect.height);
+      onGainChange(activeDragBand, newGain);
+    } else {
+      // Update hover state
+      let closestIdx = 0;
+      let minDistance = Infinity;
+
+      EQ_FREQUENCIES.forEach((freq, idx) => {
+        const bandX = getBandX(freq, rect.width);
+        const dist = Math.abs(bandX - x);
+        if (dist < minDistance) {
+          minDistance = dist;
+          closestIdx = idx;
+        }
+      });
+
+      if (minDistance < 25) {
+        setHoveredBand(closestIdx);
+      } else {
+        setHoveredBand(null);
+      }
+    }
+  };
+
+  const handleCanvasPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    setIsDraggingCurve(false);
+    setActiveDragBand(null);
+    try {
+      canvasRef.current?.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+  };
+
   // Draw real-time EQ Curve on Canvas
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -87,7 +218,6 @@ export const EqualizerRack: React.FC<EqualizerRackProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Handle high DPI
     const width = canvas.clientWidth;
     const height = canvas.clientHeight;
     const dpr = window.devicePixelRatio || 1;
@@ -96,7 +226,7 @@ export const EqualizerRack: React.FC<EqualizerRackProps> = ({
     ctx.scale(dpr, dpr);
 
     // Clear background
-    ctx.fillStyle = '#09090b'; // zinc-950
+    ctx.fillStyle = '#09090b';
     ctx.fillRect(0, 0, width, height);
 
     // Draw Grid Lines (-12dB, -6dB, 0dB, +6dB, +12dB)
@@ -126,35 +256,18 @@ export const EqualizerRack: React.FC<EqualizerRackProps> = ({
     ctx.setLineDash([]);
 
     // Compute Spline Curve from the 10 Bands
-    // Map log frequencies (20Hz to 20,000Hz) to X positions
-    const minLog = Math.log10(20);
-    const maxLog = Math.log10(20000);
-    const freqToX = (freq: number) => {
-      const logF = Math.log10(freq);
-      const ratio = (logF - minLog) / (maxLog - minLog);
-      return 35 + ratio * (width - 45);
-    };
-
-    const gainToY = (gainDb: number) => {
-      // -12dB is height * 0.9, +12dB is height * 0.1, 0dB is height * 0.5
-      const clamped = Math.max(-12, Math.min(12, gainDb));
-      return height * 0.5 - (clamped / 12) * (0.4 * height);
-    };
-
-    // Calculate curve points
     const points = EQ_FREQUENCIES.map((freq, idx) => ({
-      x: freqToX(freq),
-      y: gainToY(gains[idx] || 0),
+      x: getBandX(freq, width),
+      y: getGainY(gains[idx] || 0, height),
     }));
 
-    // Add bounding points
     const allPoints = [
-      { x: freqToX(20), y: points[0].y },
+      { x: getBandX(20, width), y: points[0].y },
       ...points,
-      { x: freqToX(20000), y: points[points.length - 1].y },
+      { x: getBandX(20000, width), y: points[points.length - 1].y },
     ];
 
-    // Smooth Bezier / Spline path
+    // Smooth Bezier path
     ctx.beginPath();
     ctx.moveTo(allPoints[0].x, allPoints[0].y);
 
@@ -195,15 +308,15 @@ export const EqualizerRack: React.FC<EqualizerRackProps> = ({
     fillPath.closePath();
 
     const gradient = ctx.createLinearGradient(0, 0, 0, height);
-    gradient.addColorStop(0, 'rgba(6, 182, 212, 0.25)'); // cyan
+    gradient.addColorStop(0, 'rgba(6, 182, 212, 0.25)');
     gradient.addColorStop(0.5, 'rgba(6, 182, 212, 0.05)');
-    gradient.addColorStop(1, 'rgba(245, 158, 11, 0.2)'); // amber
+    gradient.addColorStop(1, 'rgba(245, 158, 11, 0.2)');
     ctx.fillStyle = gradient;
     ctx.fill(fillPath);
     ctx.restore();
 
-    // Stroke the main response curve
-    ctx.strokeStyle = '#22d3ee'; // cyan-400
+    // Stroke the response curve
+    ctx.strokeStyle = '#22d3ee';
     ctx.lineWidth = 2.5;
     ctx.shadowColor = 'rgba(34, 211, 238, 0.6)';
     ctx.shadowBlur = 8;
@@ -213,15 +326,30 @@ export const EqualizerRack: React.FC<EqualizerRackProps> = ({
     // Draw glowing circles at each band anchor
     points.forEach((pt, idx) => {
       const g = gains[idx] || 0;
+      const isSelected = activeDragBand === idx || hoveredBand === idx;
+
       ctx.beginPath();
-      ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
-      ctx.fillStyle = g !== 0 ? '#38bdf8' : '#71717a';
+      ctx.arc(pt.x, pt.y, isSelected ? 6 : 4, 0, Math.PI * 2);
+      ctx.fillStyle = isSelected ? '#38bdf8' : g !== 0 ? '#06b6d4' : '#71717a';
       ctx.fill();
-      ctx.strokeStyle = '#09090b';
-      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = isSelected ? '#ffffff' : '#09090b';
+      ctx.lineWidth = isSelected ? 2 : 1.5;
       ctx.stroke();
+
+      // If active drag, show floating tooltip
+      if (isSelected) {
+        ctx.fillStyle = '#09090b';
+        ctx.fillRect(pt.x - 22, pt.y - 24, 44, 16);
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(pt.x - 22, pt.y - 24, 44, 16);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '9px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(`${g > 0 ? '+' : ''}${g}dB`, pt.x, pt.y - 13);
+      }
     });
-  }, [gains]);
+  }, [gains, activeDragBand, hoveredBand, getBandX, getGainY]);
 
   return (
     <div className="bg-zinc-900/90 border border-zinc-800 rounded-xl p-4 lg:p-5 shadow-lg flex flex-col gap-4">
@@ -236,13 +364,13 @@ export const EqualizerRack: React.FC<EqualizerRackProps> = ({
               10-BAND PRECISION EQUALIZER
             </h3>
             <p className="text-[11px] text-zinc-400">
-              Parametric curve sculpting with ±12 dB high-order biquad filters
+              Interactive draggable parametric curve with ±12 dB high-order biquad filters
             </p>
           </div>
         </div>
 
-        {/* Quick Tools: Flatten & Save Custom Preset */}
-        <div className="flex items-center gap-2">
+        {/* Quick Tools: Flatten, Export, Import, Save Preset */}
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={handleFlatten}
             className="flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-950 border border-zinc-800 text-xs font-mono text-zinc-400 hover:text-zinc-200 transition-colors"
@@ -251,6 +379,33 @@ export const EqualizerRack: React.FC<EqualizerRackProps> = ({
             <RefreshCw className="w-3 h-3" />
             <span>Flatten</span>
           </button>
+
+          {customPresets.length > 0 && (
+            <button
+              onClick={handleExportPresets}
+              className="flex items-center gap-1 px-2 py-1 rounded bg-zinc-950 border border-zinc-800 text-xs font-mono text-zinc-400 hover:text-zinc-200 transition-colors"
+              title="Export custom presets as JSON"
+            >
+              <Download className="w-3 h-3" />
+              <span>Export</span>
+            </button>
+          )}
+
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-1 px-2 py-1 rounded bg-zinc-950 border border-zinc-800 text-xs font-mono text-zinc-400 hover:text-zinc-200 transition-colors"
+            title="Import presets from JSON"
+          >
+            <Upload className="w-3 h-3" />
+            <span>Import</span>
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,application/json"
+            onChange={handleImportFile}
+            className="hidden"
+          />
 
           <button
             onClick={() => setShowSaveModal(true)}
@@ -275,7 +430,7 @@ export const EqualizerRack: React.FC<EqualizerRackProps> = ({
             <button
               key={p.id}
               onClick={() => onApplyPreset(p)}
-              className={`px-2.5 py-1 rounded text-xs font-mono shrink-0 transition-all border ${
+              className={`px-2.5 py-1 rounded text-xs font-mono shrink-0 transition-all border cursor-pointer ${
                 isActive
                   ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-300 font-semibold shadow-sm'
                   : 'bg-zinc-950/60 border-zinc-800/80 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
@@ -313,9 +468,18 @@ export const EqualizerRack: React.FC<EqualizerRackProps> = ({
         })}
       </div>
 
-      {/* Real-time Frequency Response Canvas */}
-      <div className="h-28 w-full rounded-lg overflow-hidden border border-zinc-800/90 relative bg-zinc-950">
-        <canvas ref={canvasRef} className="w-full h-full block" />
+      {/* Interactive Real-time Frequency Response Canvas (Click & Drag enabled!) */}
+      <div className="h-28 sm:h-32 w-full rounded-lg overflow-hidden border border-zinc-800/90 relative bg-zinc-950 cursor-crosshair">
+        <canvas
+          ref={canvasRef}
+          onPointerDown={handleCanvasPointerDown}
+          onPointerMove={handleCanvasPointerMove}
+          onPointerUp={handleCanvasPointerUp}
+          className="w-full h-full block touch-none"
+        />
+        <div className="absolute top-1.5 right-2 text-[9px] font-mono text-zinc-500 pointer-events-none">
+          Click or drag on curve to shape frequencies
+        </div>
       </div>
 
       {/* 10 Precision Vertical Faders */}
@@ -327,7 +491,11 @@ export const EqualizerRack: React.FC<EqualizerRackProps> = ({
           return (
             <div
               key={freq}
-              className="flex flex-col items-center justify-between bg-zinc-950/50 border border-zinc-800/80 rounded-lg py-2.5 px-1 group"
+              className={`flex flex-col items-center justify-between bg-zinc-950/50 border rounded-lg py-2.5 px-1 group transition-colors ${
+                activeDragBand === idx || hoveredBand === idx
+                  ? 'border-cyan-500/60 ring-1 ring-cyan-500/30'
+                  : 'border-zinc-800/80'
+              }`}
               onDoubleClick={() => onGainChange(idx, 0)}
               title={`Double-click to reset ${label} to 0 dB`}
             >
