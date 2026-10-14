@@ -1,0 +1,6 @@
+{
+  "name": "AuraBoost - Speaker Booster & Clarity Equalizer",
+  "description": "High-fidelity speaker volume booster, 10-band equalizer, and dialogue clarity enhancer with real-time audio DSP and anti-clipping protection.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
